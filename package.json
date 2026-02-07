@@ -1,0 +1,36 @@
+{
+  "name": "thesystem",
+  "version": "0.1.0",
+  "description": "Install it and you have a dev shop",
+  "main": "dist/index.js",
+  "bin": {
+    "thesystem": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js start",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tjamescouch/TheSystem.git"
+  },
+  "keywords": ["agents", "agentchat", "devshop", "orchestrator"],
+  "author": "James Couch",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "bugs": {
+    "url": "https://github.com/tjamescouch/TheSystem/issues"
+  },
+  "homepage": "https://github.com/tjamescouch/TheSystem#readme",
+  "dependencies": {
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  }
+}
