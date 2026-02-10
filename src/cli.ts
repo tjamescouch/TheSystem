@@ -2,6 +2,9 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { loadConfig, writeDefaultConfig } from './config-loader';
 import { Orchestrator } from './orchestrator';
 import { ComponentStatus } from './types';
@@ -14,16 +17,19 @@ function printUsage(): void {
 thesystem v${VERSION} — install it and you have a dev shop
 
 Usage:
-  thesystem init          Create thesystem.yaml with defaults
-  thesystem start         Boot Lima VM and all services
-  thesystem stop          Graceful shutdown (services + VM)
-  thesystem status        Show component status
-  thesystem destroy       Delete VM (rebuild from scratch on next start)
-  thesystem doctor        Check prerequisites and health
-  thesystem config        Show resolved configuration
-  thesystem logs [svc]    Tail logs from a service (server, dashboard, swarm)
-  thesystem version       Show version
-  thesystem help          Show this message
+  thesystem init              Create thesystem.yaml with defaults
+  thesystem start             Boot Lima VM and all services
+  thesystem stop              Graceful shutdown (services + VM)
+  thesystem status            Show component status
+  thesystem destroy           Delete VM (rebuild from scratch on next start)
+  thesystem doctor            Check prerequisites and health
+  thesystem config            Show resolved configuration
+  thesystem logs [svc]        Tail logs from a service (server, dashboard, swarm)
+  thesystem daemon install    Install launchd agent (auto-start on login)
+  thesystem daemon uninstall  Remove launchd agent
+  thesystem daemon status     Show daemon status
+  thesystem version           Show version
+  thesystem help              Show this message
 `);
 }
 
@@ -186,6 +192,146 @@ async function main(): Promise<void> {
         console.log(stdout);
       } catch (err: any) {
         console.error(`Failed to read logs: ${err.message}`);
+      }
+      break;
+    }
+
+    case 'daemon': {
+      const subcommand = args[1] || 'status';
+      const PLIST_LABEL = 'com.thesystem.daemon';
+      const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${PLIST_LABEL}.plist`);
+      const DAEMON_LOG = path.join(os.homedir(), '.thesystem', 'daemon.log');
+      const DAEMON_ERR = path.join(os.homedir(), '.thesystem', 'daemon.err');
+
+      if (subcommand === 'install') {
+        const config = loadConfig();
+        const serverUrl = config.mode === 'server'
+          ? `ws://localhost:${config.server.port}`
+          : config.client.remote;
+
+        // Find agentchat binary
+        let agentchatBin: string;
+        try {
+          const { stdout } = await exec('which', ['agentchat']);
+          agentchatBin = stdout.trim();
+        } catch {
+          // Check common locations
+          const npmGlobal = path.join(os.homedir(), '.npm-global', 'bin', 'agentchat');
+          if (fs.existsSync(npmGlobal)) {
+            agentchatBin = npmGlobal;
+          } else {
+            console.error('[thesystem] agentchat not found. Install it first: npm install -g @tjamescouch/agentchat');
+            process.exit(1);
+            return;
+          }
+        }
+
+        // Find identity file (God identity or default)
+        const identityDir = path.join(os.homedir(), '.agentchat', 'identities');
+        const godIdentity = path.join(identityDir, 'God.json');
+        const defaultIdentity = path.join(identityDir, 'claude-opus.json');
+        const identityPath = fs.existsSync(godIdentity) ? godIdentity
+          : fs.existsSync(defaultIdentity) ? defaultIdentity
+          : '';
+
+        const identityArgs = identityPath ? `        <string>--identity</string>\n        <string>${identityPath}</string>` : '';
+
+        const channels = config.channels.map(
+          (ch: string) => `        <string>${ch}</string>`
+        ).join('\n');
+
+        const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${agentchatBin}</string>
+        <string>daemon</string>
+        <string>${serverUrl}</string>
+${identityArgs}
+        <string>--channels</string>
+${channels}
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>${DAEMON_LOG}</string>
+    <key>StandardErrorPath</key>
+    <string>${DAEMON_ERR}</string>
+    <key>WorkingDirectory</key>
+    <string>${os.homedir()}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${path.dirname(agentchatBin)}</string>
+    </dict>
+</dict>
+</plist>`;
+
+        // Ensure dirs exist
+        fs.mkdirSync(path.dirname(PLIST_PATH), { recursive: true });
+        fs.mkdirSync(path.dirname(DAEMON_LOG), { recursive: true });
+
+        fs.writeFileSync(PLIST_PATH, plist);
+        console.log(`[thesystem] Wrote ${PLIST_PATH}`);
+
+        // Load the agent
+        try {
+          await exec('launchctl', ['unload', PLIST_PATH]).catch(() => {});
+          await exec('launchctl', ['load', PLIST_PATH]);
+          console.log(`[thesystem] Daemon installed and started.`);
+          console.log(`[thesystem] Server: ${serverUrl}`);
+          if (identityPath) console.log(`[thesystem] Identity: ${path.basename(identityPath)}`);
+          console.log(`[thesystem] Log: ${DAEMON_LOG}`);
+          console.log(`[thesystem] Starts automatically on login.`);
+        } catch (err: any) {
+          console.error(`[thesystem] Failed to load agent: ${err.message}`);
+          console.log(`[thesystem] Plist written. Load manually: launchctl load ${PLIST_PATH}`);
+        }
+
+      } else if (subcommand === 'uninstall') {
+        if (fs.existsSync(PLIST_PATH)) {
+          try {
+            await exec('launchctl', ['unload', PLIST_PATH]);
+          } catch { /* may not be loaded */ }
+          fs.unlinkSync(PLIST_PATH);
+          console.log('[thesystem] Daemon uninstalled.');
+        } else {
+          console.log('[thesystem] Daemon not installed.');
+        }
+
+      } else if (subcommand === 'status') {
+        if (!fs.existsSync(PLIST_PATH)) {
+          console.log('[thesystem] Daemon not installed. Run: thesystem daemon install');
+          break;
+        }
+
+        try {
+          const { stdout } = await exec('launchctl', ['list', PLIST_LABEL]);
+          console.log(`[thesystem] Daemon installed: ${PLIST_PATH}`);
+          // Parse launchctl output for PID
+          const pidMatch = stdout.match(/"PID"\s*=\s*(\d+)/);
+          if (pidMatch) {
+            console.log(`[thesystem] PID: ${pidMatch[1]}`);
+          }
+          const statusMatch = stdout.match(/"LastExitStatus"\s*=\s*(\d+)/);
+          if (statusMatch) {
+            console.log(`[thesystem] Last exit: ${statusMatch[1]}`);
+          }
+          console.log(`[thesystem] Log: ${DAEMON_LOG}`);
+        } catch {
+          console.log('[thesystem] Daemon installed but not loaded.');
+          console.log(`[thesystem] Load with: launchctl load ${PLIST_PATH}`);
+        }
+
+      } else {
+        console.error(`Unknown daemon subcommand "${subcommand}". Options: install, uninstall, status`);
+        process.exit(1);
       }
       break;
     }
