@@ -20,7 +20,15 @@ export class Orchestrator {
   private async shell(command: string, timeout = 30000): Promise<string> {
     // Write command to a temp script, execute it, clean up
     const scriptName = `.thesystem-cmd-${Date.now()}.sh`;
-    const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${command}\n`;
+
+    // Forward host env vars matching known prefixes into the VM script
+    const envForwardRegex = /^(ANTHROPIC_|THESYSTEM_|AGENTCHAT_|CLAUDE_CODE_)/;
+    const envExports = Object.entries(process.env)
+      .filter(([k]) => envForwardRegex.test(k))
+      .map(([k, v]) => `export ${k}='${(v || '').replace(/'/g, "'\\''")}'`)
+      .join('\n');
+
+    const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${envExports}\n${command}\n`;
 
     // Write script via limactl shell (simple echo, no backgrounding)
     await exec('limactl', ['shell', '--workdir', '/home', VM_NAME,
@@ -105,6 +113,7 @@ export class Orchestrator {
       THESYSTEM_SWARM_AGENTS: String(config.swarm.agents),
       THESYSTEM_SWARM_BACKEND: config.swarm.backend,
       THESYSTEM_CHANNELS: config.channels.join(','),
+      AGENTCHAT_SERVER: `ws://localhost:${config.server.port}`,
     };
 
     return YAML.stringify(doc, { lineWidth: 0 });
@@ -160,6 +169,18 @@ export class Orchestrator {
       300000
     );
 
+    console.log('[thesystem] Installing agentctl-swarm...');
+    await this.shell(
+      'npm install -g agentctl-swarm',
+      300000
+    );
+
+    console.log('[thesystem] Installing claude-code...');
+    await this.shell(
+      'npm install -g @anthropic-ai/claude-code',
+      300000
+    );
+
     console.log('[thesystem] Cloning and building dashboard...');
     await this.shell(
       'git clone https://github.com/tjamescouch/agentchat-dashboard.git ~/.thesystem/services/dashboard',
@@ -196,6 +217,24 @@ export class Orchestrator {
         '/tmp/agentchat-dashboard.log'
       );
       await this.waitForPort(config.server.dashboard);
+    }
+
+    // Start agent swarm if configured
+    if (config.swarm.agents > 0) {
+      // Guard: require auth token in environment
+      const hasAuth = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
+      if (!hasAuth) {
+        console.error('[thesystem] ERROR: No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY set.');
+        console.error('[thesystem] Agents need API access. Set one of these env vars and restart.');
+        console.error('[thesystem] Skipping swarm startup.');
+      } else {
+        console.log(`[thesystem] Starting swarm (${config.swarm.agents} agents)...`);
+        await this.daemonize(
+          `agentctl start --count ${config.swarm.agents} --channels ${config.channels.join(',')}`,
+          '/tmp/agentctl-swarm.log'
+        );
+        console.log('[thesystem] Swarm started.');
+      }
     }
   }
 

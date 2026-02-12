@@ -140,6 +140,10 @@ async function main(): Promise<void> {
         console.log('  thesystem.yaml ... not found (will use defaults)');
       }
 
+      // API key / auth token
+      const hasAuth = !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
+      console.log(`  API auth ... ${hasAuth ? 'ok' : 'MISSING (set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)'}`);
+
       // VM state
       if (hasLima) {
         const orchestrator = new Orchestrator();
@@ -156,6 +160,16 @@ async function main(): Promise<void> {
             console.log(`  VM ${stdout.trim()}`);
           } catch {
             console.log('  VM services ... unable to query');
+          }
+
+          // Check swarm process
+          try {
+            const { stdout: swarmPid } = await exec('limactl', ['shell', 'thesystem', 'bash', '-c',
+              'pgrep -f "agentctl start" | head -1'
+            ]);
+            console.log(`  Swarm ... ${swarmPid.trim() ? `running (PID ${swarmPid.trim()})` : 'not running'}`);
+          } catch {
+            console.log('  Swarm ... not running');
           }
         } else if (created) {
           console.log('  VM ... stopped (run: thesystem start)');
