@@ -20,7 +20,12 @@ export class Orchestrator {
   private async shell(command: string, timeout = 30000): Promise<string> {
     // Write command to a temp script, execute it, clean up
     const scriptName = `.thesystem-cmd-${Date.now()}.sh`;
-    const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${command}\n`;
+    // Forward whitelisted env vars into the script (ANTHROPIC_*, THESYSTEM_*, AGENTCHAT_*, CLAUDE_CODE_*)
+    const envExports = Object.entries(process.env)
+      .filter(([k]) => /^(ANTHROPIC_|THESYSTEM_|AGENTCHAT_|CLAUDE_CODE_)/.test(k))
+      .map(([k, v]) => `export ${k}='${(v || '').replace(/'/g, "'\\''")}'`)
+      .join('\n');
+    const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${envExports}\n${command}\n`;
 
     // Write script via limactl shell (simple echo, no backgrounding)
     await exec('limactl', ['shell', '--workdir', '/home', VM_NAME,
@@ -105,6 +110,8 @@ export class Orchestrator {
       THESYSTEM_SWARM_AGENTS: String(config.swarm.agents),
       THESYSTEM_SWARM_BACKEND: config.swarm.backend,
       THESYSTEM_CHANNELS: config.channels.join(','),
+      AGENTCHAT_SERVER: `ws://localhost:${config.server.port}`,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',  // stopgap: pending agentauth proxy
     };
 
     return YAML.stringify(doc, { lineWidth: 0 });
@@ -173,6 +180,18 @@ export class Orchestrator {
       'cd ~/.thesystem/services/dashboard/web && npm install && npm run build',
       120000
     );
+    console.log('[thesystem] Installing agentctl-swarm...');
+    await this.shell(
+      'npm install -g agentctl-swarm',
+      300000
+    );
+
+    console.log('[thesystem] Installing claude-code...');
+    await this.shell(
+      'npm install -g @anthropic-ai/claude-code',
+      300000
+    );
+
     console.log('[thesystem] Installation complete.');
   }
 
@@ -196,6 +215,26 @@ export class Orchestrator {
         '/tmp/agentchat-dashboard.log'
       );
       await this.waitForPort(config.server.dashboard);
+    }
+
+    // Start agent swarm
+    if (config.swarm.agents > 0) {
+      // Guard: check API key is available
+      try {
+        await this.shell('test -n "$ANTHROPIC_API_KEY" || test -n "$CLAUDE_CODE_OAUTH_TOKEN"', 5000);
+      } catch {
+        console.error('[thesystem] ERROR: No API credentials found. Agents need ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN.');
+        console.error('[thesystem] Set on host: export ANTHROPIC_API_KEY=sk-ant-...');
+        console.error('[thesystem] Then restart: thesystem stop && thesystem start');
+        console.error('[thesystem] Server and dashboard are running, but no agents will start.');
+        return;
+      }
+
+      console.log(`[thesystem] Starting agentctl-swarm (${config.swarm.agents} agents)...`);
+      await this.daemonize(
+        `agentctl start --count ${config.swarm.agents} --channels ${config.channels.join(',')}`,
+        '/tmp/agentctl-swarm.log'
+      );
     }
   }
 
