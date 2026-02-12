@@ -74,17 +74,23 @@ async function main(): Promise<void> {
 
       const orchestrator = new Orchestrator();
 
-      process.on('SIGINT', async () => {
-        console.log('\n[thesystem] Caught SIGINT, shutting down...');
-        await orchestrator.stop();
+      const gracefulShutdown = async (signal: string) => {
+        console.log(`\n[thesystem] Caught ${signal}, shutting down...`);
+        const forceTimeout = setTimeout(() => {
+          console.error('[thesystem] Shutdown timed out after 30s, forcing exit.');
+          process.exit(1);
+        }, 30000);
+        try {
+          await orchestrator.stop();
+        } catch (err: any) {
+          console.error(`[thesystem] Error during shutdown: ${err.message}`);
+        }
+        clearTimeout(forceTimeout);
         process.exit(0);
-      });
+      };
 
-      process.on('SIGTERM', async () => {
-        console.log('\n[thesystem] Caught SIGTERM, shutting down...');
-        await orchestrator.stop();
-        process.exit(0);
-      });
+      process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+      process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
       await orchestrator.start(config);
 
@@ -113,8 +119,7 @@ async function main(): Promise<void> {
     case 'status': {
       const config = loadConfig();
       const orchestrator = new Orchestrator();
-      // Store config so getStatus can read ports
-      (orchestrator as any).config = config;
+      orchestrator.setConfig(config);
       const statuses = await orchestrator.getStatus();
       printStatusTable(statuses);
       break;

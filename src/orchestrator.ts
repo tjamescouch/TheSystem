@@ -12,6 +12,11 @@ const VM_NAME = 'thesystem';
 export class Orchestrator {
   private config: SystemConfig | null = null;
 
+  /** Set config for use by getStatus() and other methods that need port info */
+  setConfig(config: SystemConfig): void {
+    this.config = config;
+  }
+
   private async limactl(args: string[], timeout = 300000): Promise<string> {
     const { stdout } = await exec('limactl', args, { timeout });
     return stdout.trim();
@@ -35,7 +40,9 @@ export class Orchestrator {
     // Cleanup
     exec('limactl', ['shell', '--workdir', '/home', VM_NAME,
       'rm', '-f', `/tmp/${scriptName}`
-    ]).catch(() => {});
+    ]).catch((err) => {
+      console.warn(`[thesystem] Cleanup of temp script failed: ${err.message}`);
+    });
 
     return stdout.trim();
   }
@@ -150,6 +157,13 @@ export class Orchestrator {
     // Always need agentchat
     try {
       await this.shell('which agentchat', 5000);
+      // Update to latest if already installed
+      console.log('[thesystem] Checking agentchat for updates...');
+      try {
+        await this.shell('npm update -g @tjamescouch/agentchat', 60000);
+      } catch {
+        console.warn('[thesystem] agentchat update check failed, continuing with installed version.');
+      }
     } catch {
       console.log('[thesystem] Installing agentchat (first run)...');
       await this.shell(
@@ -162,6 +176,16 @@ export class Orchestrator {
     if (config.mode === 'server') {
       try {
         await this.shell('test -d ~/.thesystem/services/dashboard', 5000);
+        // Update dashboard to latest
+        console.log('[thesystem] Checking dashboard for updates...');
+        try {
+          await this.shell(
+            'cd ~/.thesystem/services/dashboard && git pull --ff-only && cd server && npm install && npx tsc && cd ../web && npm install && npm run build',
+            120000
+          );
+        } catch {
+          console.warn('[thesystem] Dashboard update failed, continuing with installed version.');
+        }
       } catch {
         console.log('[thesystem] Cloning and building dashboard...');
         await this.shell(
@@ -182,16 +206,31 @@ export class Orchestrator {
     // Both modes: need theswarm for spawning agents
     try {
       await this.shell('which agentctl', 5000);
-    } catch {
-      console.log('[thesystem] Installing theswarm...');
-      // Install from host-mounted dev directory if available, else clone
+      // Update theswarm if installed from git clone
+      console.log('[thesystem] Checking theswarm for updates...');
       try {
-        await this.shell('test -d ~/dev/claude/agent-006/agentctl-swarm', 5000);
         await this.shell(
-          'cd ~/dev/claude/agent-006/agentctl-swarm && npm install -g .',
-          120000
+          'test -d ~/.thesystem/services/theswarm && cd ~/.thesystem/services/theswarm && git pull --ff-only && npm install -g .',
+          60000
         );
       } catch {
+        console.warn('[thesystem] theswarm update check failed, continuing with installed version.');
+      }
+    } catch {
+      console.log('[thesystem] Installing theswarm...');
+      // Install from host-mounted dev directory if available (set THESYSTEM_SWARM_DEV_PATH), else clone
+      const swarmDevPath = process.env.THESYSTEM_SWARM_DEV_PATH;
+      let installedFromDev = false;
+      if (swarmDevPath) {
+        try {
+          await this.shell(`test -d ${swarmDevPath}`, 5000);
+          await this.shell(`cd ${swarmDevPath} && npm install -g .`, 120000);
+          installedFromDev = true;
+        } catch {
+          console.log(`[thesystem] Dev path ${swarmDevPath} not found, falling back to git clone...`);
+        }
+      }
+      if (!installedFromDev) {
         await this.shell(
           'git clone https://github.com/tjamescouch/agentctl-swarm.git ~/.thesystem/services/theswarm && cd ~/.thesystem/services/theswarm && npm install -g .',
           120000
@@ -202,6 +241,12 @@ export class Orchestrator {
     // Both modes: need claude CLI for agents
     try {
       await this.shell('which claude', 5000);
+      console.log('[thesystem] Checking Claude Code CLI for updates...');
+      try {
+        await this.shell('npm update -g @anthropic-ai/claude-code', 60000);
+      } catch {
+        console.warn('[thesystem] Claude Code CLI update check failed, continuing with installed version.');
+      }
     } catch {
       console.log('[thesystem] Installing Claude Code CLI...');
       await this.shell(
