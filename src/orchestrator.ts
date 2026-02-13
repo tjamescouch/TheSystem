@@ -9,6 +9,18 @@ const exec = promisify(execFile);
 
 const VM_NAME = 'thesystem';
 
+/** Env var names that contain secrets — NEVER forward into the VM */
+const SECRET_ENV_VARS = new Set([
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'GITHUB_TOKEN',
+  'GITHUB_TOKEN_BEARER',
+]);
+
+/** Default agentauth proxy port */
+const AGENTAUTH_PORT = 9999;
+
 export class Orchestrator {
   private config: SystemConfig | null = null;
 
@@ -22,13 +34,21 @@ export class Orchestrator {
     const scriptName = `.thesystem-cmd-${Date.now()}.sh`;
 
     // Forward host env vars matching known prefixes into the VM script
+    // SECURITY: Strip vars containing secrets — agents use agentauth proxy instead
     const envForwardRegex = /^(ANTHROPIC_|THESYSTEM_|AGENTCHAT_|CLAUDE_CODE_)/;
     const envExports = Object.entries(process.env)
-      .filter(([k]) => envForwardRegex.test(k))
+      .filter(([k]) => envForwardRegex.test(k) && !SECRET_ENV_VARS.has(k))
       .map(([k, v]) => `export ${k}='${(v || '').replace(/'/g, "'\\''")}'`)
       .join('\n');
 
-    const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${envExports}\n${command}\n`;
+    // Inject proxy URLs so agents route through agentauth
+    const proxyPort = process.env.AGENTAUTH_PORT || String(AGENTAUTH_PORT);
+    const proxyExports = [
+      `export ANTHROPIC_BASE_URL='http://host.lima.internal:${proxyPort}/anthropic'`,
+      `export ANTHROPIC_API_KEY='proxy-managed'`,
+    ].join('\n');
+
+    const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${envExports}\n${proxyExports}\n${command}\n`;
 
     // Write script via limactl shell (simple echo, no backgrounding)
     await exec('limactl', ['shell', '--workdir', '/home', VM_NAME,
@@ -221,13 +241,22 @@ export class Orchestrator {
 
     // Start agent swarm if configured
     if (config.swarm.agents > 0) {
-      // Guard: require auth token in environment
-      const hasAuth = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
-      if (!hasAuth) {
-        console.error('[thesystem] ERROR: No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY set.');
-        console.error('[thesystem] Agents need API access. Set one of these env vars and restart.');
-        console.error('[thesystem] Skipping swarm startup.');
+      // Guard: require agentauth proxy running on the host
+      const proxyPort = process.env.AGENTAUTH_PORT || String(AGENTAUTH_PORT);
+      let proxyOk = false;
+      try {
+        await exec('curl', ['-sf', `http://localhost:${proxyPort}/agentauth/health`], { timeout: 3000 });
+        proxyOk = true;
+      } catch {
+        // Proxy not running
+      }
+
+      if (!proxyOk) {
+        console.error('[thesystem] ERROR: agentauth proxy not running on localhost:' + proxyPort);
+        console.error('[thesystem] Start it first: cd agentauth && node dist/index.js');
+        console.error('[thesystem] Agents need API access via proxy. Skipping swarm startup.');
       } else {
+        console.log(`[thesystem] agentauth proxy detected on :${proxyPort}`);
         console.log(`[thesystem] Starting swarm (${config.swarm.agents} agents)...`);
         await this.daemonize(
           `agentctl start --count ${config.swarm.agents} --channels ${config.channels.join(',')}`,
