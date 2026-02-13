@@ -1,37 +1,61 @@
 # orchestrator
 
-manages the lifecycle of all components as child processes.
+manages the lifecycle of the Lima VM, services, and agent swarm.
 
 ## state
 
-- component process map: `{ name: { pid, port, status, restarts } }`
-- dependency graph (boot order)
-- health check intervals
+- VM status: created / running / stopped
+- component status map: `{ name: { pid, port, status, restarts } }`
+- system config (from config-loader)
 
 ## capabilities
 
-- start components in dependency order (server first, then swarm, then dashboard)
-- stop components in reverse dependency order
-- monitor component health via HTTP health endpoints or process signals
-- restart failed components with exponential backoff (max 5 retries)
+### implemented ✅
+- create/start/stop/destroy Lima VM via `limactl`
+- generate Lima YAML from config (VM resources, port forwards, env vars)
+- install packages on first run (agentchat, agentctl, claude-code, dashboard)
+- start services in dependency order: agentchat-server → dashboard → swarm
+- stop services in reverse order via `pkill`
+- wait for port readiness before starting downstream services
+- daemonize processes via `setsid` for SSH-safe background execution
+- forward env vars into VM (whitelist pattern: `ANTHROPIC_|THESYSTEM_|AGENTCHAT_|CLAUDE_CODE_`)
+- strip secrets from env forwarding (5 key names blocked)
+- inject agentauth proxy URLs into VM environment
+- guard swarm startup on agentauth proxy health check
+- expose component status via pgrep process detection
+
+### not yet implemented ❌
+- restart failed components with exponential backoff
+- HTTP health endpoint probing (currently pgrep only)
 - multiplex component logs to stdout with `[component]` prefixes
-- expose aggregate status (all components healthy / degraded / down)
+- restart single component
+- per-agent Podman container creation and management
+- egress filtering (iptables) on containers
 
 ## interfaces
 
 exposes:
-- `start(config)` — boot all components
-- `stop()` — graceful shutdown
-- `status()` — return component health map
-- `restart(component)` — restart a single component
+- `start(config)` — create/start VM, install packages, start services + swarm
+- `stop()` — stop services in reverse order, stop VM
+- `destroy()` — stop everything, delete VM
+- `getStatus()` — return component health map
+
+internal:
+- `shell(command, timeout)` — execute command inside VM via limactl
+- `daemonize(command, logFile)` — background-start a process in VM
+- `waitForPort(port, timeout)` — poll until port is listening
+- `generateLimaYaml(config)` — build VM template from config
 
 depends on:
-- config-loader (for component configuration)
-- each component's binary/entry point
+- config-loader (for system configuration)
+- `limactl` binary (Lima VM management)
+- agentauth proxy on host (for API key access)
+- agentchat, agentctl, claude-code npm packages (installed inside VM)
 
 ## invariants
 
-- components are always stopped in reverse boot order
-- a component is never started if its dependencies are not healthy
-- health check failure triggers restart, not immediate crash
+- secrets never enter the VM — enforced by SECRET_ENV_VARS set
+- services are always stopped in reverse boot order
+- VM creation uses temporary YAML file, cleaned up after create
+- swarm never starts without healthy agentauth proxy
 - all child processes are cleaned up on TheSystem exit (SIGTERM propagation)
