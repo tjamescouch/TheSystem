@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { loadConfig, writeDefaultConfig } from './config-loader';
 import { Orchestrator } from './orchestrator';
 import { ComponentStatus } from './types';
+import { runInit } from './init';
 
 const exec = promisify(execFile);
 const VERSION = '0.2.0';
@@ -23,7 +24,11 @@ Usage:
   thesystem config        Show resolved configuration
   thesystem logs [svc]    Tail logs from a service (server, dashboard, swarm)
   thesystem version       Show version
+  thesystem reinstall     Reinstall components inside VM
   thesystem help          Show this message
+
+Options:
+  thesystem init -y       Non-interactive init (skip prompts)
 `);
 }
 
@@ -56,9 +61,8 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'init': {
-      const configPath = writeDefaultConfig(process.cwd());
-      console.log(`Created ${configPath}`);
-      console.log('Edit the file to customize, then run: thesystem start');
+      const nonInteractive = args.includes('--yes') || args.includes('-y');
+      await runInit({ cwd: process.cwd(), nonInteractive });
       break;
     }
 
@@ -186,7 +190,7 @@ async function main(): Promise<void> {
       const svc = args[1] || 'server';
       const logMap: Record<string, string> = {
         server: '/tmp/agentchat-server.log',
-        dashboard: '/tmp/agentchat-dashboard.log',
+        dashboard: '/tmp/agentdash.log',
         swarm: '/tmp/agentctl-swarm.log',
       };
       const logFile = logMap[svc];
@@ -212,6 +216,18 @@ async function main(): Promise<void> {
 
     case 'version': {
       console.log(`thesystem v${VERSION}`);
+      break;
+    }
+
+    case 'reinstall': {
+      console.log('[thesystem] Reinstalling components inside VM...');
+      const orchestrator = new Orchestrator();
+      const running = await orchestrator.isVmRunning();
+      if (!running) {
+        console.error('[thesystem] VM is not running. Start it first: thesystem start');
+        process.exit(1);
+      }
+      await (orchestrator as any).reinstall();
       break;
     }
 

@@ -183,38 +183,59 @@ export class Orchestrator {
       // Need to install
     }
 
-    console.log('[thesystem] Installing agentchat (first run)...');
-    await this.shell(
-      'npm install -g @tjamescouch/agentchat',
-      300000
-    );
+    console.log('[thesystem] First run detected — installing components...');
+    console.log('[thesystem] This takes 3-5 minutes. Grab a coffee. ☕\n');
 
-    console.log('[thesystem] Installing agentctl-swarm...');
-    await this.shell(
-      'npm install -g agentctl-swarm',
-      300000
-    );
+    const steps = [
+      {
+        name: 'agentchat server',
+        cmd: 'npm install -g @tjamescouch/agentchat',
+        timeout: 300000,
+      },
+      {
+        name: 'agentctl-swarm',
+        cmd: 'npm install -g agentctl-swarm',
+        timeout: 300000,
+      },
+      {
+        name: 'claude-code runtime',
+        cmd: 'npm install -g @anthropic-ai/claude-code',
+        timeout: 300000,
+      },
+      {
+        name: 'dashboard (clone)',
+        cmd: 'git clone https://github.com/tjamescouch/agentdash.git ~/.thesystem/services/dashboard',
+        timeout: 120000,
+      },
+      {
+        name: 'dashboard server (build)',
+        cmd: 'cd ~/.thesystem/services/dashboard/server && npm install && npx tsc',
+        timeout: 120000,
+      },
+      {
+        name: 'dashboard web (build)',
+        cmd: 'cd ~/.thesystem/services/dashboard/web && npm install && npm run build',
+        timeout: 120000,
+      },
+    ];
 
-    console.log('[thesystem] Installing claude-code...');
-    await this.shell(
-      'npm install -g @anthropic-ai/claude-code',
-      300000
-    );
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const progress = `[${i + 1}/${steps.length}]`;
+      console.log(`  ${progress} Installing ${step.name}...`);
+      try {
+        await this.shell(step.cmd, step.timeout);
+        console.log(`  ${progress} ✓ ${step.name}`);
+      } catch (err: any) {
+        console.error(`  ${progress} ✗ ${step.name} — ${err.message}`);
+        console.error(`\n[thesystem] Installation failed at step ${i + 1}.`);
+        console.error('[thesystem] Fix the issue and run: thesystem start');
+        console.error('[thesystem] Or start fresh: thesystem destroy && thesystem start');
+        throw err;
+      }
+    }
 
-    console.log('[thesystem] Cloning and building dashboard...');
-    await this.shell(
-      'git clone https://github.com/tjamescouch/agentchat-dashboard.git ~/.thesystem/services/dashboard',
-      120000
-    );
-    await this.shell(
-      'cd ~/.thesystem/services/dashboard/server && npm install && npx tsc',
-      120000
-    );
-    await this.shell(
-      'cd ~/.thesystem/services/dashboard/web && npm install && npm run build',
-      120000
-    );
-    console.log('[thesystem] Installation complete.');
+    console.log('\n[thesystem] ✓ All components installed.');
   }
 
   private async startServices(config: SystemConfig): Promise<void> {
@@ -231,10 +252,10 @@ export class Orchestrator {
       );
       await this.waitForPort(config.server.port, 30000);
 
-      console.log('[thesystem] Starting agentchat-dashboard...');
+      console.log('[thesystem] Starting agentdash...');
       await this.daemonize(
         `cd ~/.thesystem/services/dashboard/server && AGENTCHAT_WS_URL=ws://localhost:${config.server.port} PORT=${config.server.dashboard} node dist/index.js`,
-        '/tmp/agentchat-dashboard.log'
+        '/tmp/agentdash.log'
       );
       await this.waitForPort(config.server.dashboard);
     }
@@ -300,7 +321,7 @@ export class Orchestrator {
     console.log('[thesystem] Stopping services...');
     const stopPatterns = [
       { name: 'agentctl-swarm', grep: 'agentctl-swarm' },
-      { name: 'agentchat-dashboard', grep: 'dashboard/server' },
+      { name: 'agentdash', grep: 'dashboard/server' },
       { name: 'agentchat-server', grep: 'agentchat serve' },
     ];
     for (const proc of stopPatterns) {
@@ -335,6 +356,18 @@ export class Orchestrator {
     console.log('[thesystem] Destroyed. Run "thesystem start" to rebuild.');
   }
 
+  /**
+   * Force reinstall all components inside the VM.
+   * Useful for recovery when installIfNeeded() failed partway.
+   */
+  async reinstall(): Promise<void> {
+    console.log('[thesystem] Cleaning previous installation...');
+    await this.shell('rm -rf ~/.thesystem/services/dashboard', 30000).catch(() => {});
+    await this.shell('npm uninstall -g @tjamescouch/agentchat agentctl-swarm @anthropic-ai/claude-code 2>/dev/null || true', 30000).catch(() => {});
+    console.log('[thesystem] Clean. Running fresh install...');
+    await this.installIfNeeded();
+  }
+
   async getStatus(): Promise<ComponentStatus[]> {
     const running = await this.isVmRunning();
     if (!running) {
@@ -347,7 +380,7 @@ export class Orchestrator {
 
     const services = [
       { name: 'agentchat-server', grep: 'agentchat serve' },
-      { name: 'agentchat-dashboard', grep: 'dashboard/server' },
+      { name: 'agentdash', grep: 'dashboard/server' },
       { name: 'agentctl-swarm', grep: 'agentctl-swarm' },
     ];
 
@@ -355,7 +388,7 @@ export class Orchestrator {
       try {
         const pid = await this.shell(`pgrep -f "${svc.grep}" | head -1`);
         const port = svc.name === 'agentchat-server' ? (this.config?.server.port ?? 6667)
-          : svc.name === 'agentchat-dashboard' ? (this.config?.server.dashboard ?? 3000)
+          : svc.name === 'agentdash' ? (this.config?.server.dashboard ?? 3000)
           : null;
 
         components.push({
