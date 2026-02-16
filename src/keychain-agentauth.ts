@@ -20,6 +20,7 @@ async function readKeyFromKeychain(provider: string): Promise<string> {
  * Minimal host-side agentauth proxy.
  * - /agentauth/health -> 200 OK
  * - /anthropic/* -> forwards to https://api.anthropic.com/* with x-api-key from Keychain
+ * - /openai/* -> forwards to https://api.openai.com/* with Authorization Bearer from Keychain
  *
  * SECURITY NOTE:
  * This intentionally only listens on localhost and never logs secrets.
@@ -51,6 +52,38 @@ export async function startAgentAuthProxy(opts: StartOpts): Promise<void> {
           const headers: Record<string, string> = {
             'x-api-key': apiKey,
             'anthropic-version': String(req.headers['anthropic-version'] || '2023-06-01'),
+          };
+          if (req.headers['content-type']) headers['content-type'] = String(req.headers['content-type']);
+
+          // Pass through selected headers (no auth headers)
+          const resp = await fetch(upstreamUrl, {
+            method: req.method,
+            headers,
+            body: ['GET', 'HEAD'].includes((req.method || 'GET').toUpperCase()) ? undefined : body,
+          });
+
+          res.writeHead(resp.status, Object.fromEntries(resp.headers.entries()));
+          const respBuf = Buffer.from(await resp.arrayBuffer());
+          res.end(respBuf);
+        });
+        return;
+      }
+
+      // OpenAI proxy
+      if (url.pathname === '/openai' || url.pathname.startsWith('/openai/')) {
+        const upstreamPath = url.pathname.replace(/^\/openai/, '') || '/';
+        const upstreamUrl = new URL(`https://api.openai.com${upstreamPath}${url.search}`);
+
+        const apiKey = await readKeyFromKeychain('openai');
+
+        // Read request body
+        const chunks: Buffer[] = [];
+        req.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+        req.on('end', async () => {
+          const body = Buffer.concat(chunks);
+
+          const headers: Record<string, string> = {
+            'Authorization': `Bearer ${apiKey}`,
           };
           if (req.headers['content-type']) headers['content-type'] = String(req.headers['content-type']);
 

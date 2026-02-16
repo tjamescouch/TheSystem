@@ -46,6 +46,8 @@ export class Orchestrator {
     const proxyExports = [
       `export ANTHROPIC_BASE_URL='http://host.lima.internal:${proxyPort}/anthropic'`,
       `export ANTHROPIC_API_KEY='proxy-managed'`,
+      `export OPENAI_BASE_URL='http://host.lima.internal:${proxyPort}/openai'`,
+      `export OPENAI_API_KEY='proxy-managed'`,
     ].join('\n');
 
     const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${envExports}\n${proxyExports}\n${command}\n`;
