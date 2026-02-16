@@ -41,16 +41,12 @@ export class Orchestrator {
       .map(([k, v]) => `export ${k}='${(v || '').replace(/'/g, "'\\''")}'`)
       .join('\n');
 
-    // Inject proxy URLs so agents route through agentauth when available.
-    // If no proxy is running, we leave provider defaults alone and allow env-var auth.
+    // Inject proxy URLs so agents route through agentauth.
     const proxyPort = process.env.AGENTAUTH_PORT || String(AGENTAUTH_PORT);
-    const useProxy = (process.env.THESYSTEM_USE_AGENTAUTH_PROXY || '').toLowerCase() === '1'
-      || (process.env.THESYSTEM_USE_AGENTAUTH_PROXY || '').toLowerCase() === 'true'
-      || false;
-    const proxyExports = useProxy ? [
+    const proxyExports = [
       `export ANTHROPIC_BASE_URL='http://host.lima.internal:${proxyPort}/anthropic'`,
       `export ANTHROPIC_API_KEY='proxy-managed'`,
-    ].join('\n') : '';
+    ].join('\n');
 
     const script = `#!/bin/bash\nexport PATH="$HOME/.npm-global/bin:$PATH"\n${envExports}\n${proxyExports}\n${command}\n`;
 
@@ -266,7 +262,8 @@ export class Orchestrator {
 
     // Start agent swarm if configured
     if (config.swarm.agents > 0) {
-      // Guard (soft): prefer agentauth proxy on host, but allow env-var auth fallback
+      // Guard: require agentauth proxy running on the host.
+      // SECURITY: do not support env-var auth fallback by default (exfil risk).
       const proxyPort = process.env.AGENTAUTH_PORT || String(AGENTAUTH_PORT);
       let proxyOk = false;
       try {
@@ -276,21 +273,14 @@ export class Orchestrator {
         // Proxy not running
       }
 
-      if (proxyOk) {
-        console.log(`[thesystem] agentauth proxy detected on :${proxyPort}`);
-      } else {
-        const hasEnvAuth = !!(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.OPENAI_API_KEY);
-        if (!hasEnvAuth) {
-          console.error('[thesystem] ERROR: no auth available for agents.');
-          console.error(`[thesystem] - agentauth proxy not running on localhost:${proxyPort}`);
-          console.error('[thesystem] - and no env-var fallback set (ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN / OPENAI_API_KEY)');
-          console.error('[thesystem] Skipping swarm startup.');
-          return;
-        }
-        console.warn(`[thesystem] WARNING: agentauth proxy not running on localhost:${proxyPort}`);
-        console.warn('[thesystem] Falling back to env-var auth for now (less secure).');
+      if (!proxyOk) {
+        console.error('[thesystem] ERROR: agentauth proxy not running on localhost:' + proxyPort);
+        console.error('[thesystem] Start it first: thesystem agentauth start');
+        console.error('[thesystem] Agents need API access via proxy. Skipping swarm startup.');
+        return;
       }
 
+      console.log(`[thesystem] agentauth proxy detected on :${proxyPort}`);
       console.log(`[thesystem] Starting swarm (${config.swarm.agents} agents)...`);
       await this.daemonize(
         `agentctl start --count ${config.swarm.agents} --channels ${config.channels.join(',')}`,

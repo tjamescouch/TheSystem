@@ -25,6 +25,9 @@ Usage:
   thesystem logs [svc]    Tail logs from a service (server, dashboard, swarm)
   thesystem version       Show version
   thesystem reinstall     Reinstall components inside VM
+  thesystem keys set      Store API keys in macOS Keychain
+  thesystem keys get      Read API keys from macOS Keychain (prints to stdout)
+  thesystem agentauth     Run local agentauth proxy (required for swarm)
   thesystem help          Show this message
 
 Options:
@@ -144,9 +147,18 @@ async function main(): Promise<void> {
         console.log('  thesystem.yaml ... not found (will use defaults)');
       }
 
-      // API key / auth token
-      const hasAuth = !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY);
-      console.log(`  API auth ... ${hasAuth ? 'ok' : 'MISSING (set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY)'}`);
+      // API key / auth token: prefer Keychain via agentauth proxy.
+      // SECURITY: fail fast if secrets are present in env (exfil risk).
+      const envSecrets = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'GITHUB_TOKEN', 'GITHUB_TOKEN_BEARER']
+        .filter(k => !!process.env[k]);
+      if (envSecrets.length) {
+        console.log(`  API auth ... FAIL (secrets present in env: ${envSecrets.join(', ')})`);
+        console.log('           Use: thesystem keys set <provider> <key>  (stores in macOS Keychain)');
+        console.log('           Then: thesystem agentauth start');
+      } else {
+        console.log('  API auth ... ok (no secrets in env)');
+        console.log('           Note: swarm still requires agentauth proxy healthy on localhost:9999');
+      }
 
       // VM state
       if (hasLima) {
@@ -183,6 +195,50 @@ async function main(): Promise<void> {
       }
 
       console.log('\n[thesystem] Diagnostics complete.');
+      break;
+    }
+
+    case 'keys': {
+      const sub = args[1] || 'help';
+      if (sub === 'set') {
+        const provider = args[2];
+        const key = args[3];
+        if (!provider || !key) {
+          console.error('Usage: thesystem keys set <provider> <key>');
+          process.exit(1);
+        }
+        const svc = `thesystem/${provider}`;
+        // macOS Keychain (generic password): account=provider, service=thesystem/<provider>
+        // -U updates existing
+        await exec('security', ['add-generic-password', '-a', provider, '-s', svc, '-w', key, '-U']);
+        console.log(`[thesystem] Stored key in macOS Keychain service="${svc}" account="${provider}"`);
+        break;
+      }
+      if (sub === 'get') {
+        const provider = args[2];
+        if (!provider) {
+          console.error('Usage: thesystem keys get <provider>');
+          process.exit(1);
+        }
+        const svc = `thesystem/${provider}`;
+        const { stdout } = await exec('security', ['find-generic-password', '-a', provider, '-s', svc, '-w']);
+        process.stdout.write(stdout);
+        break;
+      }
+      console.error('Usage: thesystem keys <set|get> ...');
+      process.exit(1);
+    }
+
+    case 'agentauth': {
+      const sub = args[1] || 'start';
+      if (sub !== 'start') {
+        console.error('Usage: thesystem agentauth start');
+        process.exit(1);
+      }
+      // Lazy import so CLI still works in minimal envs.
+      const { startAgentAuthProxy } = await import('./keychain-agentauth');
+      const port = Number(process.env.AGENTAUTH_PORT || 9999);
+      await startAgentAuthProxy({ port });
       break;
     }
 
