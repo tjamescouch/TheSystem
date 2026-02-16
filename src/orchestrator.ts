@@ -41,7 +41,7 @@ export class Orchestrator {
       .map(([k, v]) => `export ${k}='${(v || '').replace(/'/g, "'\\''")}'`)
       .join('\n');
 
-    // Inject proxy URLs so agents route through agentauth
+    // Inject proxy URLs so agents route through agentauth.
     const proxyPort = process.env.AGENTAUTH_PORT || String(AGENTAUTH_PORT);
     const proxyExports = [
       `export ANTHROPIC_BASE_URL='http://host.lima.internal:${proxyPort}/anthropic'`,
@@ -262,7 +262,8 @@ export class Orchestrator {
 
     // Start agent swarm if configured
     if (config.swarm.agents > 0) {
-      // Guard: require agentauth proxy running on the host
+      // Guard: require agentauth proxy running on the host.
+      // SECURITY: do not support env-var auth fallback by default (exfil risk).
       const proxyPort = process.env.AGENTAUTH_PORT || String(AGENTAUTH_PORT);
       let proxyOk = false;
       try {
@@ -274,17 +275,18 @@ export class Orchestrator {
 
       if (!proxyOk) {
         console.error('[thesystem] ERROR: agentauth proxy not running on localhost:' + proxyPort);
-        console.error('[thesystem] Start it first: cd agentauth && node dist/index.js');
+        console.error('[thesystem] Start it first: thesystem agentauth start');
         console.error('[thesystem] Agents need API access via proxy. Skipping swarm startup.');
-      } else {
-        console.log(`[thesystem] agentauth proxy detected on :${proxyPort}`);
-        console.log(`[thesystem] Starting swarm (${config.swarm.agents} agents)...`);
-        await this.daemonize(
-          `agentctl start --count ${config.swarm.agents} --channels ${config.channels.join(',')}`,
-          '/tmp/agentctl-swarm.log'
-        );
-        console.log('[thesystem] Swarm started.');
+        return;
       }
+
+      console.log(`[thesystem] agentauth proxy detected on :${proxyPort}`);
+      console.log(`[thesystem] Starting swarm (${config.swarm.agents} agents)...`);
+      await this.daemonize(
+        `agentctl start --count ${config.swarm.agents} --channels ${config.channels.join(',')}`,
+        '/tmp/agentctl-swarm.log'
+      );
+      console.log('[thesystem] Swarm started.');
     }
   }
 
