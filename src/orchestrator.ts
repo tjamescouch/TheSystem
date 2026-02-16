@@ -205,6 +205,21 @@ export class Orchestrator {
         timeout: 300000,
       },
       {
+        name: 'gro runtime',
+        cmd: 'npm install -g @tjamescouch/gro',
+        timeout: 300000,
+      },
+      {
+        name: 'niki supervisor',
+        cmd: 'npm install -g @tjamescouch/niki',
+        timeout: 300000,
+      },
+      {
+        name: 'agentctl.sh script',
+        cmd: 'curl -fsSL https://raw.githubusercontent.com/tjamescouch/agentchat/main/lib/supervisor/agentctl.sh -o /usr/local/bin/agentctl && chmod +x /usr/local/bin/agentctl',
+        timeout: 60000,
+      },
+      {
         name: 'dashboard (clone)',
         cmd: 'git clone https://github.com/tjamescouch/agentdash.git ~/.thesystem/services/dashboard',
         timeout: 120000,
