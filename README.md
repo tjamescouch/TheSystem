@@ -9,13 +9,11 @@ brew tap tjamescouch/thesystem
 brew install thesystem
 thesystem init
 
-# Store API keys in macOS Keychain
+# Store API keys in macOS Keychain (one-time setup)
 thesystem keys set anthropic sk-ant-...
+thesystem keys set openai sk-...       # optional
 
-# Start the agentauth proxy (reads from Keychain, required for swarm)
-thesystem agentauth start &
-
-# Boot the VM and all services
+# Boot the VM and all services (proxy auto-starts)
 thesystem start
 ```
 
@@ -67,9 +65,10 @@ thesystem config                  Show resolved configuration
 thesystem logs [svc]              Tail logs (server, dashboard, swarm)
 thesystem version                 Show version
 thesystem reinstall               Reinstall all components inside the VM
+thesystem go                      Open interactive shell inside the VM
 thesystem keys set <provider> <key>   Store API key in macOS Keychain
 thesystem keys get <provider>         Read API key from macOS Keychain
-thesystem agentauth [start]       Start the host-side agentauth proxy
+thesystem agentauth start         Start the host-side agentauth proxy manually
 ```
 
 ## Configuration
@@ -112,12 +111,9 @@ Secrets never leave the host machine. The agentauth proxy reads keys from macOS 
 # Store keys (one-time setup)
 thesystem keys set anthropic sk-ant-...
 thesystem keys set openai sk-...
-
-# Start the proxy (must be running before `thesystem start`)
-thesystem agentauth start
 ```
 
-The swarm will not start if the agentauth proxy is not healthy. This is enforced — there is no env-var fallback.
+The agentauth proxy starts automatically as part of `thesystem start`. You can also run it manually with `thesystem agentauth start` if needed outside of the normal start sequence.
 
 ## Architecture
 
@@ -159,8 +155,8 @@ The VM protects your Mac from the managed agents. If a managed agent goes rogue,
 ### Security Notes
 
 - API keys are stored in **macOS Keychain** and never passed into the VM.
-- The agentauth proxy listens on `127.0.0.1` only. Agents route through it via `host.lima.internal`.
-- Swarm startup is blocked unless the agentauth proxy is healthy — no silent env-var fallback.
+- The agentauth proxy binds to `0.0.0.0` so Lima containers can reach it via `host.lima.internal`. Restrict external access via macOS firewall.
+- The agentauth proxy auto-starts with `thesystem start` — no manual step required.
 - `~/dev` is mounted **read-only**. Agents write to their own workspace inside the container.
 - In **server mode** with public access, keep the attack surface minimal — the server accepts inbound connections.
 
@@ -191,7 +187,7 @@ $ thesystem doctor
 ```
 
 Common issues:
-- **Swarm won't start**: Ensure `thesystem agentauth start` is running. Check with `curl http://localhost:9999/agentauth/health`.
+- **Swarm won't start**: The proxy should auto-start, but check health with `curl http://localhost:9999/agentauth/health`. If it fails, ensure keys are set (`thesystem keys set anthropic <key>`) then retry.
 - **VM won't start**: Check `limactl list`. Delete and recreate with `thesystem destroy && thesystem start`.
 - **Port conflict**: Another process using 6667 or 3000. Change ports in `thesystem.yaml`.
 - **Slow first start**: First run downloads Ubuntu image and installs packages. Subsequent starts are fast.
