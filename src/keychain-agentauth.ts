@@ -7,6 +7,7 @@ const exec = promisify(execFile);
 
 type StartOpts = {
   port: number;
+  bind?: string;
 };
 
 async function readKeyFromKeychain(provider: string): Promise<string> {
@@ -24,7 +25,8 @@ async function readKeyFromKeychain(provider: string): Promise<string> {
  * - /openai/* -> forwards to https://api.openai.com/* with Authorization Bearer from Keychain
  *
  * SECURITY NOTE:
- * This intentionally only listens on localhost and never logs secrets.
+ * Binds to all interfaces (0.0.0.0) so Lima VM containers can reach it via
+ * host.lima.internal. Restrict external access via host firewall.
  */
 export async function startAgentAuthProxy(opts: StartOpts): Promise<void> {
   const server = http.createServer(async (req, res) => {
@@ -129,9 +131,9 @@ export async function startAgentAuthProxy(opts: StartOpts): Promise<void> {
     }
   });
 
-  // Bind to all interfaces so Lima VM can reach the proxy via host.lima.internal
-  server.listen(opts.port, '0.0.0.0', () => {
-    console.log(`[thesystem] agentauth proxy listening on http://0.0.0.0:${opts.port} (LAN + VM accessible)`);
+  const bindAddr = opts.bind ?? '0.0.0.0';
+  server.listen(opts.port, bindAddr, () => {
+    console.log(`[thesystem] agentauth proxy listening on http://${bindAddr}:${opts.port} (LAN + VM accessible)`);
   });
 
   // Keep process alive

@@ -239,7 +239,8 @@ async function main(): Promise<void> {
       // Lazy import so CLI still works in minimal envs.
       const { startAgentAuthProxy } = await import('./keychain-agentauth');
       const port = Number(process.env.AGENTAUTH_PORT || 9999);
-      await startAgentAuthProxy({ port });
+      const bind = process.env.AGENTAUTH_BIND || '0.0.0.0';
+      await startAgentAuthProxy({ port, bind });
       break;
     }
 
