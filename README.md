@@ -192,6 +192,7 @@ Common issues:
 - **Port conflict**: Another process using 6667 or 3000. Change ports in `thesystem.yaml`.
 - **Slow first start**: First run downloads Ubuntu image and installs packages. Subsequent starts are fast.
 - **Components out of date**: Run `thesystem reinstall` to force a fresh install inside the VM.
+- **`limactl shell thesystem` fails**: Lima resolves your cwd inside the VM, so running the command from a directory that isn't mounted will error. Use `cd /tmp && limactl shell thesystem` or add an alias: `alias entersystem='cd /tmp && limactl shell thesystem'`.
 
 ## License
 
